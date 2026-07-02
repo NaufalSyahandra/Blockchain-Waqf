@@ -36,11 +36,12 @@ export default function ExplorerDetail() {
 
     const fetchLogs = async (registry: string) => {
         const latest = await publicClient.getBlockNumber()
-        const STEP = 800n
+
+        const STEP = BigInt(800)
         let actAll: any[] = []
         let benAll: any[] = []
 
-        for (let start = latest - 2000n; start < latest; start += STEP) {
+        for (let start = latest - BigInt(2000); start < latest; start += STEP) {
             const end = start + STEP > latest ? latest : start + STEP
             try {
                 const [act, ben] = await Promise.all([
