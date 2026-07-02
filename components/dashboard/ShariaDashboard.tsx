@@ -185,7 +185,9 @@ export default function ShariaDashboard() {
         if (!isConnected) { toast.error('Wallet belum terkoneksi.'); return }
         try {
             setProcessingId(asset.id)
-            const { error } = await approveAsset(asset, writeContractAsync)
+
+            const { error } = await approveAsset({ asset, writeContractAsync })
+
             if (error) throw error
             setSessionStats(s => ({ ...s, approved: s.approved + 1 }))
             toast.success('Approved & recorded on-chain')
