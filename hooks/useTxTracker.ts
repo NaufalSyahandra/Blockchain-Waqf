@@ -11,7 +11,6 @@ export type TxItem = {
 export function useTxTracker() {
     const [txs, setTxs] = useState<TxItem[]>([])
 
-    // 🔥 tambah tx baru
     const addTx = (hash: string) => {
         setTxs(prev => [
             { hash, status: 'pending' },
@@ -19,13 +18,12 @@ export function useTxTracker() {
         ])
     }
 
-    // 🔥 cek status tx
     useEffect(() => {
         if (txs.length === 0) return
 
         const interval = setInterval(async () => {
             const updated = await Promise.all(
-                txs.map(async (tx) => {
+                txs.map(async (tx): Promise<TxItem> => {
                     if (tx.status !== 'pending') return tx
 
                     try {
@@ -34,9 +32,9 @@ export function useTxTracker() {
                         })
 
                         if (receipt.status === 'success') {
-                            return { ...tx, status: 'success' }
+                            return { ...tx, status: 'success' as const }
                         } else {
-                            return { ...tx, status: 'failed' }
+                            return { ...tx, status: 'failed' as const }
                         }
                     } catch {
                         return tx
