@@ -14,13 +14,14 @@ export const getAssetHistory = async (
 ) => {
     try {
         const latest = await publicClient.getBlockNumber()
-        const STEP   = 10n   // Alchemy free tier max 10 blocks
-        const from   = latest - 100n > 0n ? latest - 100n : 0n
+
+        const STEP   = BigInt(10)   // Alchemy free tier max 10 blocks
+        const from   = latest - BigInt(100) > BigInt(0) ? latest - BigInt(100) : BigInt(0)
 
         let allLogs: any[] = []
 
         for (let start = from; start <= latest; start += STEP) {
-            const end = start + STEP - 1n > latest ? latest : start + STEP - 1n
+            const end = start + STEP - BigInt(1) > latest ? latest : start + STEP - BigInt(1)
             try {
                 const [managed, benefits] = await Promise.all([
                     publicClient.getLogs({
@@ -45,7 +46,13 @@ export const getAssetHistory = async (
         }
 
         return allLogs
-            .sort((a, b) => Number((b.blockNumber ?? 0n) - (a.blockNumber ?? 0n)))
+            .sort((a, b) => {
+                const bBlock = b.blockNumber ?? BigInt(0)
+                const aBlock = a.blockNumber ?? BigInt(0)
+                if (bBlock > aBlock) return 1
+                if (bBlock < aBlock) return -1
+                return 0
+            })
             .map((log: any) => {
                 if (log.eventName === 'AssetManaged') {
                     return {
