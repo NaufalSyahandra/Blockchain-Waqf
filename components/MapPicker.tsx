@@ -3,6 +3,7 @@
 import { MapContainer, TileLayer, Marker, useMapEvents } from 'react-leaflet'
 import 'leaflet/dist/leaflet.css'
 import { useState } from 'react'
+import { LeafletMouseEvent } from 'leaflet'
 
 type Props = {
     onSelect: (lat: number, lng: number) => void
@@ -12,7 +13,7 @@ function LocationMarker({ onSelect }: Props) {
     const [position, setPosition] = useState<any>(null)
 
     useMapEvents({
-        click(e) {
+        click(e: LeafletMouseEvent) {
             setPosition(e.latlng)
             onSelect(e.latlng.lat, e.latlng.lng)
         },
