@@ -20,7 +20,9 @@ function LeftGridCanvas() {
         let animFrame: number
         type Node = { x: number; y: number; alpha: number; speed: number; dir: number }
         let nodes: Node[] = [], W = 0, H = 0
+
         function resize() {
+            if (!canvas) return
             W = canvas.width = canvas.offsetWidth
             H = canvas.height = canvas.offsetHeight
             nodes = []
@@ -66,7 +68,9 @@ function RightBgCanvas() {
         let W = 0, H = 0
         type Particle = { x: number; y: number; vx: number; vy: number; r: number; alpha: number }
         let particles: Particle[] = []
+
         function resize() {
+            if (!canvas) return
             W = canvas.width = canvas.offsetWidth
             H = canvas.height = canvas.offsetHeight
             particles = Array.from({ length: 28 }, () => ({
