@@ -122,14 +122,15 @@ export default function NazhirDashboard() {
         const fetchLogs = async () => {
             try {
                 const latest = await publicClient.getBlockNumber()
-                const from   = latest - 100n > 0n ? latest - 100n : 0n
-                const STEP   = 10n  // Alchemy free tier max 10 blocks per request
+
+                const from   = latest - BigInt(100) > BigInt(0) ? latest - BigInt(100) : BigInt(0)
+                const STEP   = BigInt(10)  // Alchemy free tier max 10 blocks per request
 
                 let allActs: any[] = []
                 let allBens: any[] = []
 
                 for (let start = from; start <= latest; start += STEP) {
-                    const end = start + STEP - 1n > latest ? latest : start + STEP - 1n
+                    const end = start + STEP - BigInt(1) > latest ? latest : start + STEP - BigInt(1)
                     try {
                         const [acts, bens] = await Promise.all([
                             publicClient.getLogs({
