@@ -217,8 +217,15 @@ export default function NazhirDashboard() {
             sub: log.transactionHash?.slice(0, 14) + '…',
             blockNumber: log.blockNumber,
         }))
+
         return [...acts, ...bens]
-            .sort((a, b) => Number((b.blockNumber ?? 0n) - (a.blockNumber ?? 0n)))
+            .sort((a, b) => {
+                const bBlock = b.blockNumber ?? BigInt(0)
+                const aBlock = a.blockNumber ?? BigInt(0)
+                if (bBlock > aBlock) return 1
+                if (bBlock < aBlock) return -1
+                return 0
+            })
             .slice(0, 20)
     }, [activities, benefits])
 
