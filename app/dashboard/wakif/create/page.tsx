@@ -36,8 +36,8 @@ function AddressInput({ value, onChange, onCoordinatesFound }: AddressInputProps
     const [suggestions, setSuggestions] = useState<any[]>([])
     const [loading, setLoading] = useState(false)
     const [open, setOpen] = useState(false)
-    const debounceRef = useRef<ReturnType<typeof setTimeout>>()
-    const abortRef = useRef<AbortController>()
+    const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined)
+    const abortRef = useRef<AbortController>(undefined)
 
     const search = useCallback(async (q: string) => {
         if (q.length < 4) { setSuggestions([]); setOpen(false); return }
