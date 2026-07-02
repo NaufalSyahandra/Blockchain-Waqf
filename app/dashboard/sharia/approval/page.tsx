@@ -132,7 +132,9 @@ export default function ShariaApprovalPage() {
         }
         try {
             setProcessingId(asset.id)
-            const { error } = await approveAsset(asset, writeContractAsync)
+
+            const { error } = await approveAsset(asset)
+
             if (error) throw error
             setStats(s => ({ ...s, approved: s.approved + 1 }))
             toast.success('Approved & recorded on-chain ✓')
