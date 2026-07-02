@@ -127,7 +127,7 @@ export default function CreateRegistryPage() {
         try {
             setTxStatus('pending')
             const hash = await writeContractAsync({
-                address: FACTORY_ADDRESS,
+                address: FACTORY_ADDRESS as `0x${string}`,
                 abi: FACTORY_ABI,
                 functionName: 'createRegistry',
             })
@@ -172,7 +172,7 @@ export default function CreateRegistryPage() {
                     <div className="mb-4 flex items-center gap-3 bg-red-50 border border-red-200 rounded-xl px-4 py-3">
                         <AlertTriangle size={15} className="text-red-500 shrink-0" />
                         <p className="text-[12px] text-red-600 flex-1">
-                            You're on the wrong network. Switch to Sepolia to continue.
+                            You&#39;re on the wrong network. Switch to Sepolia to continue.
                         </p>
                         <button
                             onClick={() => switchChain({ chainId: sepolia.id })}
