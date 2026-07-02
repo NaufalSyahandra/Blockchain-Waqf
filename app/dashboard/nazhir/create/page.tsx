@@ -47,7 +47,7 @@ export default function CreateRegistryPage() {
         const estimate = async () => {
             try {
                 const gas   = await publicClient.estimateContractGas({
-                    address: FACTORY_ADDRESS,
+                    address: FACTORY_ADDRESS as `0x${string}`,
                     abi: FACTORY_ABI,
                     functionName: 'createRegistry',
                     account: address,
