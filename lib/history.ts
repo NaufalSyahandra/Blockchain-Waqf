@@ -1,0 +1,74 @@
+import { publicClient } from '@/lib/publicClient'
+import { parseAbiItem } from 'viem'
+
+const assetManagedEvent = parseAbiItem(
+    'event AssetManaged(uint256 indexed id, string activity)'
+)
+const benefitDistributedEvent = parseAbiItem(
+    'event BenefitDistributed(uint256 indexed id, address indexed to, string description)'
+)
+
+export const getAssetHistory = async (
+    registryAddress: `0x${string}`,
+    assetId: number
+) => {
+    try {
+        const latest = await publicClient.getBlockNumber()
+        const STEP   = 10n   // Alchemy free tier max 10 blocks
+        const from   = latest - 100n > 0n ? latest - 100n : 0n
+
+        let allLogs: any[] = []
+
+        for (let start = from; start <= latest; start += STEP) {
+            const end = start + STEP - 1n > latest ? latest : start + STEP - 1n
+            try {
+                const [managed, benefits] = await Promise.all([
+                    publicClient.getLogs({
+                        address: registryAddress,
+                        event: assetManagedEvent,
+                        args: { id: BigInt(assetId) },  // filter by assetId on-chain
+                        fromBlock: start,
+                        toBlock: end,
+                    }),
+                    publicClient.getLogs({
+                        address: registryAddress,
+                        event: benefitDistributedEvent,
+                        args: { id: BigInt(assetId) },
+                        fromBlock: start,
+                        toBlock: end,
+                    }),
+                ])
+                allLogs = [...allLogs, ...managed, ...benefits]
+            } catch {
+                // skip chunk error
+            }
+        }
+
+        return allLogs
+            .sort((a, b) => Number((b.blockNumber ?? 0n) - (a.blockNumber ?? 0n)))
+            .map((log: any) => {
+                if (log.eventName === 'AssetManaged') {
+                    return {
+                        type:        'activity' as const,
+                        description: log.args.activity,   // field 'activity' sesuai ABI
+                        txHash:      log.transactionHash,
+                        blockNumber: log.blockNumber,
+                    }
+                }
+                if (log.eventName === 'BenefitDistributed') {
+                    return {
+                        type:        'benefit' as const,
+                        description: log.args.description,
+                        recipient:   log.args.to,         // field 'to' sesuai ABI
+                        txHash:      log.transactionHash,
+                        blockNumber: log.blockNumber,
+                    }
+                }
+            })
+            .filter(Boolean)
+
+    } catch (err) {
+        console.error('[getAssetHistory]', err)
+        return []
+    }
+}
