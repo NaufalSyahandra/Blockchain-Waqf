@@ -3,7 +3,6 @@
 import { useEffect, useState } from 'react'
 import { useParams } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
-import { getAssetHistory } from '@/lib/history'
 import Link from 'next/link'
 import {
     MapPin, Tag, FileText, ExternalLink,
@@ -15,7 +14,7 @@ type HistoryItem = {
     description: string
     recipient?: string
     txHash: string
-    blockNumber?: bigint
+    created_at?: string
 }
 
 export default function AssetDetailPage() {
@@ -27,27 +26,49 @@ export default function AssetDetailPage() {
 
     useEffect(() => {
         fetchData()
-    }, [])
+    }, [id])
 
     const fetchData = async () => {
         setLoading(true)
-        const { data } = await supabase
-            .from('assets')
-            .select('*')
-            .eq('id', id)
-            .single()
+        try {
+            // 1. Ambil data Asset Utama
+            const { data: assetData } = await supabase
+                .from('assets')
+                .select('*')
+                .eq('id', id)
+                .single()
 
-        setAsset(data)
+            setAsset(assetData)
 
-        if (data?.registry_address && data?.onchain_id != null) {
-            const logs = await getAssetHistory(
-                data.registry_address as `0x${string}`,
-                Number(data.onchain_id)
-            )
-            setHistory((logs as HistoryItem[]) || [])
+            if (assetData) {
+                // 2. Ambil data Riwayat Distribusi/Benefit langsung dari Supabase
+                // Sesuaikan nama tabel 'distributions' atau nama tabel riwayat Anda jika berbeda
+                const { data: benefitLogs } = await supabase
+                    .from('distributions')
+                    .select('*')
+                    .eq('asset_id', id) // Berdasarkan ID Asset relasi di Supabase
+
+                // Format data dari database agar sesuai dengan struktur tampilan timeline
+                const formattedBenefits: HistoryItem[] = (benefitLogs || []).map((item: any) => ({
+                    type: 'benefit',
+                    description: item.description || item.notes || 'Distribusi manfaat wakaf',
+                    recipient: item.recipient_name || item.recipient,
+                    txHash: item.tx_hash || item.txHash || '',
+                    created_at: item.created_at
+                }))
+
+                // Gabungkan riwayat (jika ada tabel khusus aktivitas lain, bisa di-fetch & digabungkan di sini)
+                const combinedHistory = [...formattedBenefits].sort(
+                    (a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime()
+                )
+
+                setHistory(combinedHistory)
+            }
+        } catch (error) {
+            console.error("Gagal memuat riwayat aset:", error)
+        } finally {
+            setLoading(false)
         }
-
-        setLoading(false)
     }
 
     if (loading) return (
@@ -68,8 +89,8 @@ export default function AssetDetailPage() {
         rejected: 'bg-red-50 text-red-600 border-red-200',
     }
 
-    const activities  = history.filter(h => h.type === 'activity')
-    const benefits    = history.filter(h => h.type === 'benefit')
+    const activities  = history.filter(h => h.type?.toLowerCase() === 'activity')
+    const benefits    = history.filter(h => h.type?.toLowerCase() === 'benefit')
 
     return (
         <div className="min-h-screen bg-neutral-50 p-6">
@@ -159,45 +180,50 @@ export default function AssetDetailPage() {
                         )}
 
                         <div className="space-y-4">
-                            {history.map((item, i) => (
-                                <div key={i} className="flex gap-4 relative">
-                                    {/* dot */}
-                                    <div className={`w-4 h-4 rounded-full border-2 border-white shadow-sm shrink-0 mt-0.5 z-10 ${
-                                        item.type === 'activity' ? 'bg-neutral-700' : 'bg-green-500'
-                                    }`} />
+                            {history.map((item, i) => {
+                                const isActivity = item.type?.toLowerCase() === 'activity';
+                                return (
+                                    <div key={i} className="flex gap-4 relative">
+                                        {/* dot */}
+                                        <div className={`w-4 h-4 rounded-full border-2 border-white shadow-sm shrink-0 mt-0.5 z-10 ${
+                                            isActivity ? 'bg-neutral-700' : 'bg-green-500'
+                                        }`} />
 
-                                    <div className="flex-1 pb-1">
-                                        <div className="flex items-center gap-2 mb-1">
-                                            <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full border ${
-                                                item.type === 'activity'
-                                                    ? 'bg-neutral-50 text-neutral-600 border-neutral-200'
-                                                    : 'bg-green-50 text-green-700 border-green-200'
-                                            }`}>
-                                                {item.type === 'activity' ? 'Activity' : 'Benefit'}
-                                            </span>
-                                        </div>
+                                        <div className="flex-1 pb-1">
+                                            <div className="flex items-center gap-2 mb-1">
+                                                <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full border ${
+                                                    isActivity
+                                                        ? 'bg-neutral-50 text-neutral-600 border-neutral-200'
+                                                        : 'bg-green-50 text-green-700 border-green-200'
+                                                }`}>
+                                                    {isActivity ? 'Activity' : 'Benefit'}
+                                                </span>
+                                            </div>
 
-                                        <p className="text-[13px] text-neutral-700 mb-1.5">
-                                            {item.description}
-                                        </p>
-
-                                        {item.recipient && (
-                                            <p className="text-[11px] text-neutral-400 font-mono mb-1">
-                                                → {item.recipient}
+                                            <p className="text-[13px] text-neutral-700 mb-1.5">
+                                                {item.description}
                                             </p>
-                                        )}
 
-                                        <a
-                                            href={`https://sepolia.etherscan.io/tx/${item.txHash}`}
-                                            target="_blank"
-                                            rel="noreferrer"
-                                            className="inline-flex items-center gap-1 text-[11px] text-blue-500 hover:underline font-mono"
-                                        >
-                                            {item.txHash.slice(0, 14)}… <ExternalLink size={10} />
-                                        </a>
+                                            {item.recipient && (
+                                                <p className="text-[11px] text-neutral-400 font-mono mb-1">
+                                                    → {item.recipient}
+                                                </p>
+                                            )}
+
+                                            {item.txHash && (
+                                                <a
+                                                    href={`https://sepolia.etherscan.io/tx/${item.txHash}`}
+                                                    target="_blank"
+                                                    rel="noreferrer"
+                                                    className="inline-flex items-center gap-1 text-[11px] text-blue-500 hover:underline font-mono"
+                                                >
+                                                    {item.txHash.slice(0, 14)}… <ExternalLink size={10} />
+                                                </a>
+                                            )}
+                                        </div>
                                     </div>
-                                </div>
-                            ))}
+                                )
+                            })}
                         </div>
                     </div>
                 </div>

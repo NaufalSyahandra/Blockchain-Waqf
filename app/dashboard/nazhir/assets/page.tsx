@@ -5,15 +5,19 @@ import { supabase } from '@/lib/supabase'
 import { recordActivity, distributeBenefit } from '@/lib/registry'
 import { useUser } from '@/hooks/useUser'
 import Link from 'next/link'
-import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { MapPin, Tag, ArrowUpRight, X, Zap, Gift } from 'lucide-react'
+import { MapPin, Tag, ArrowUpRight, X, Zap, Gift, ChevronLeft, Building2 } from 'lucide-react'
 import { toast } from 'sonner'
 
 export default function NazhirAssetsPage() {
     const { user, loading } = useUser()
 
+    const [registries, setRegistries]       = useState<any[]>([])
+    const [selectedRegistry, setSelectedRegistry] = useState<any>(null)
+
     const [assets, setAssets]               = useState<any[]>([])
+    const [assetsLoading, setAssetsLoading] = useState(false)
+
     const [selectedAsset, setSelectedAsset] = useState<any>(null)
     const [mode, setMode]                   = useState<'activity' | 'benefit' | null>(null)
     const [submitting, setSubmitting]       = useState(false)
@@ -22,17 +26,37 @@ export default function NazhirAssetsPage() {
     const [benefitAddress, setBenefitAddress] = useState('')
     const [benefitDesc, setBenefitDesc]     = useState('')
 
+    // Step 1: ambil semua registry milik nazhir ini
     useEffect(() => {
-        if (user) fetchAssets()
+        if (user) fetchRegistries()
     }, [user])
 
-    const fetchAssets = async () => {
+    const fetchRegistries = async () => {
+        const { data } = await supabase
+            .from('registries')
+            .select('*')
+            .eq('nazhir_id', user.id)
+            .order('created_at', { ascending: false })
+        setRegistries(data || [])
+    }
+
+    // Step 2: setelah registry dipilih, baru ambil assets-nya
+    const selectRegistry = async (registry: any) => {
+        setSelectedRegistry(registry)
+        setAssetsLoading(true)
         const { data } = await supabase
             .from('assets')
             .select('*')
             .eq('status', 'approved')
+            .eq('registry_address', registry.registry_address)
             .order('created_at', { ascending: false })
         setAssets(data || [])
+        setAssetsLoading(false)
+    }
+
+    const backToRegistries = () => {
+        setSelectedRegistry(null)
+        setAssets([])
     }
 
     const openModal = (asset: any, m: 'activity' | 'benefit') => {
@@ -56,9 +80,9 @@ export default function NazhirAssetsPage() {
                 if (!activityInput) return
                 await recordActivity(
                     selectedAsset.registry_address,
-                    selectedAsset.id,           // uuid supabase
-                    selectedAsset.onchain_id,   // integer untuk contract
-                    user.id,                    // actor_id
+                    selectedAsset.id,
+                    selectedAsset.onchain_id,
+                    user.id,
                     activityInput
                 )
             }
@@ -66,8 +90,8 @@ export default function NazhirAssetsPage() {
                 if (!benefitAddress || !benefitDesc) return
                 await distributeBenefit(
                     selectedAsset.registry_address,
-                    selectedAsset.id,           // uuid supabase
-                    selectedAsset.onchain_id,   // integer untuk contract
+                    selectedAsset.id,
+                    selectedAsset.onchain_id,
                     benefitAddress as `0x${string}`,
                     benefitDesc
                 )
@@ -95,92 +119,166 @@ export default function NazhirAssetsPage() {
     )
 
     return (
-        <div className="min-h-screen bg-neutral-50 p-6">
-            <div className="max-w-4xl mx-auto">
+        <div className="bg-neutral-50 p-6">
+            <div className="mx-auto">
 
-                {/* Header */}
-                <div className="mb-6">
-                    <p className="text-[11px] font-medium tracking-widest uppercase text-neutral-400 mb-1">
-                        Nazhir
-                    </p>
-                    <h1 className="text-[22px] font-semibold text-neutral-900">Manage Assets</h1>
-                    <p className="text-[13px] text-neutral-400 mt-1">
-                        Approved waqf assets under your registry.
-                    </p>
-                </div>
+                {/* ===== STEP 1: PILIH REGISTRY ===== */}
+                {!selectedRegistry && (
+                    <>
+                        <div className="mb-8">
+                            <p className="text-[11px] font-medium tracking-widest uppercase text-neutral-400 mb-1">
+                                Nazhir
+                            </p>
+                            <h1 className="text-[22px] font-semibold text-neutral-900">Select Registry</h1>
+                            <p className="text-[13px] text-neutral-400 mt-1">
+                                Choose which registry you want to manage assets for.
+                            </p>
+                        </div>
 
-                {/* Empty state */}
-                {assets.length === 0 && (
-                    <div className="bg-white border border-neutral-200 rounded-xl p-10 text-center">
-                        <p className="text-[13px] text-neutral-400">No approved assets yet.</p>
-                    </div>
+                        {registries.length === 0 && (
+                            <div className="bg-white border border-neutral-200 rounded-xl p-10 text-center">
+                                <p className="text-[13px] text-neutral-400">You haven't created any registry yet.</p>
+                            </div>
+                        )}
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                            {registries.map((r) => (
+                                <button
+                                    key={r.id}
+                                    onClick={() => selectRegistry(r)}
+                                    className="group relative text-left bg-white border border-neutral-200 rounded-2xl p-5 overflow-hidden
+                               hover:border-emerald-300 hover:shadow-[0_4px_20px_-4px_rgba(16,185,129,0.15)]
+                               hover:-translate-y-0.5 transition-all duration-200"
+                                >
+                                    {/* subtle corner glow, muncul on hover */}
+                                    <div className="absolute -top-8 -right-8 w-24 h-24 rounded-full bg-emerald-50 opacity-0
+                                    group-hover:opacity-100 transition-opacity duration-300 blur-2xl" />
+
+                                    <div className="relative flex items-start justify-between mb-4">
+                                        <div className="w-11 h-11 rounded-xl bg-emerald-50 flex items-center justify-center
+                                        group-hover:bg-emerald-100 transition-colors">
+                                            <Building2 size={19} className="text-emerald-600" />
+                                        </div>
+                                        <ArrowUpRight
+                                            size={16}
+                                            className="text-neutral-300 group-hover:text-emerald-500 group-hover:translate-x-0.5
+                                       group-hover:-translate-y-0.5 transition-all"
+                                        />
+                                    </div>
+
+                                    <p className="relative text-[14px] font-semibold text-neutral-900 mb-1 truncate">
+                                        {r.name}
+                                    </p>
+                                    <p className="relative text-[11px] text-neutral-400 font-mono truncate mb-4">
+                                        {r.registry_address}
+                                    </p>
+
+                                    <div className="relative flex items-center gap-1.5 pt-3 border-t border-neutral-100">
+                                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                                        <span className="text-[10.5px] font-medium text-neutral-500 uppercase tracking-wide">
+                            {r.network || 'sepolia'}
+                        </span>
+                                    </div>
+                                </button>
+                            ))}
+                        </div>
+                    </>
                 )}
 
-                {/* Asset list */}
-                <div className="space-y-3">
-                    {assets.map((a) => (
-                        <div
-                            key={a.id}
-                            className="bg-white border border-neutral-200 rounded-xl p-5 flex flex-col sm:flex-row sm:items-center gap-4"
+                {/* ===== STEP 2: ASSETS DI DALAM REGISTRY TERPILIH ===== */}
+                {selectedRegistry && (
+                    <>
+                        <button
+                            onClick={backToRegistries}
+                            className="flex items-center gap-1 text-[12px] font-medium text-neutral-500 hover:text-neutral-800 mb-4 transition-colors"
                         >
-                            {/* Info */}
-                            <div className="flex-1 min-w-0">
-                                <div className="flex items-center gap-2 mb-1.5">
-                                    <span className="text-[13px] font-semibold text-neutral-800 truncate">
-                                        {a.name}
-                                    </span>
-                                    <span className="shrink-0 text-[10px] font-medium px-2 py-0.5 rounded-full bg-green-50 text-green-700 border border-green-200">
-                                        Approved
-                                    </span>
-                                </div>
-                                <div className="flex items-center gap-3 text-[11.5px] text-neutral-400">
-                                    {a.asset_type && (
-                                        <span className="flex items-center gap-1">
-                                            <Tag size={11} /> {a.asset_type}
-                                        </span>
-                                    )}
-                                    {a.location && (
-                                        <span className="flex items-center gap-1">
-                                            <MapPin size={11} /> {a.location}
-                                        </span>
-                                    )}
-                                </div>
-                            </div>
+                            <ChevronLeft size={14} /> Back to registries
+                        </button>
 
-                            {/* Actions */}
-                            <div className="flex items-center gap-2 shrink-0">
-                                <button
-                                    onClick={() => openModal(a, 'activity')}
-                                    className="flex items-center gap-1.5 text-[12px] font-medium px-3 py-1.5 rounded-lg bg-neutral-900 text-white hover:bg-neutral-700 transition-colors"
-                                >
-                                    <Zap size={12} /> Activity
-                                </button>
-                                <button
-                                    onClick={() => openModal(a, 'benefit')}
-                                    className="flex items-center gap-1.5 text-[12px] font-medium px-3 py-1.5 rounded-lg bg-green-600 text-white hover:bg-green-700 transition-colors"
-                                >
-                                    <Gift size={12} /> Benefit
-                                </button>
-                                <Link href={`/dashboard/assets/${a.id}`}>
-                                    <button className="flex items-center gap-1 text-[12px] font-medium px-3 py-1.5 rounded-lg border border-neutral-200 text-neutral-600 hover:bg-neutral-50 transition-colors">
-                                        View <ArrowUpRight size={12} />
-                                    </button>
-                                </Link>
-                            </div>
+                        <div className="mb-6">
+                            <p className="text-[11px] font-medium tracking-widest uppercase text-neutral-400 mb-1">
+                                {selectedRegistry.name}
+                            </p>
+                            <h1 className="text-[22px] font-semibold text-neutral-900">Manage Assets</h1>
+                            <p className="text-[13px] text-neutral-400 mt-1">
+                                Approved waqf assets under this registry.
+                            </p>
                         </div>
-                    ))}
-                </div>
+
+                        {assetsLoading && (
+                            <div className="bg-white border border-neutral-200 rounded-xl p-10 text-center">
+                                <p className="text-[13px] text-neutral-400">Loading assets...</p>
+                            </div>
+                        )}
+
+                        {!assetsLoading && assets.length === 0 && (
+                            <div className="bg-white border border-neutral-200 rounded-xl p-10 text-center">
+                                <p className="text-[13px] text-neutral-400">No approved assets yet.</p>
+                            </div>
+                        )}
+
+                        <div className="space-y-3">
+                            {assets.map((a) => (
+                                <div
+                                    key={a.id}
+                                    className="bg-white border border-neutral-200 rounded-xl p-5 flex flex-col sm:flex-row sm:items-center gap-4"
+                                >
+                                    <div className="flex-1 min-w-0">
+                                        <div className="flex items-center gap-2 mb-1.5">
+                                            <span className="text-[13px] font-semibold text-neutral-800 truncate">
+                                                {a.name}
+                                            </span>
+                                            <span className="shrink-0 text-[10px] font-medium px-2 py-0.5 rounded-full bg-green-50 text-green-700 border border-green-200">
+                                                Approved
+                                            </span>
+                                        </div>
+                                        <div className="flex items-center gap-3 text-[11.5px] text-neutral-400">
+                                            {a.asset_type && (
+                                                <span className="flex items-center gap-1">
+                                                    <Tag size={11} /> {a.asset_type}
+                                                </span>
+                                            )}
+                                            {a.location && (
+                                                <span className="flex items-center gap-1">
+                                                    <MapPin size={11} /> {a.location}
+                                                </span>
+                                            )}
+                                        </div>
+                                    </div>
+
+                                    <div className="flex items-center gap-2 shrink-0">
+                                        <button
+                                            onClick={() => openModal(a, 'activity')}
+                                            className="flex items-center gap-1.5 text-[12px] font-medium px-3 py-1.5 rounded-lg bg-neutral-900 text-white hover:bg-neutral-700 transition-colors"
+                                        >
+                                            <Zap size={12} /> Activity
+                                        </button>
+                                        <button
+                                            onClick={() => openModal(a, 'benefit')}
+                                            className="flex items-center gap-1.5 text-[12px] font-medium px-3 py-1.5 rounded-lg bg-green-600 text-white hover:bg-green-700 transition-colors"
+                                        >
+                                            <Gift size={12} /> Benefit
+                                        </button>
+                                        <Link href={`/dashboard/assets/${a.id}`}>
+                                            <button className="flex items-center gap-1 text-[12px] font-medium px-3 py-1.5 rounded-lg border border-neutral-200 text-neutral-600 hover:bg-neutral-50 transition-colors">
+                                                View <ArrowUpRight size={12} />
+                                            </button>
+                                        </Link>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </>
+                )}
             </div>
 
-            {/* Modal */}
+            {/* Modal (tetap sama) */}
             {selectedAsset && mode && (
                 <div
                     className="fixed inset-0 bg-black/30 backdrop-blur-sm flex items-center justify-center z-50 p-4"
                     onClick={(e) => { if (e.target === e.currentTarget) closeModal() }}
                 >
                     <div className="bg-white rounded-2xl border border-neutral-200 shadow-xl w-full max-w-md p-6">
-
-                        {/* Modal header */}
                         <div className="flex items-center justify-between mb-5">
                             <div>
                                 <p className="text-[11px] font-medium tracking-widest uppercase text-neutral-400 mb-0.5">
@@ -198,7 +296,6 @@ export default function NazhirAssetsPage() {
                             </button>
                         </div>
 
-                        {/* Modal fields */}
                         <div className="space-y-3 mb-5">
                             {mode === 'activity' && (
                                 <div>
@@ -242,7 +339,6 @@ export default function NazhirAssetsPage() {
                             )}
                         </div>
 
-                        {/* Modal actions */}
                         <div className="flex gap-2">
                             <button
                                 onClick={closeModal}
@@ -262,7 +358,6 @@ export default function NazhirAssetsPage() {
                                 {submitting ? 'Submitting...' : 'Submit'}
                             </button>
                         </div>
-
                     </div>
                 </div>
             )}

@@ -5,8 +5,11 @@ import { supabase } from '@/lib/supabase'
 import { publicClient } from '@/lib/publicClient'
 import { parseAbiItem } from 'viem'
 import { useParams } from 'next/navigation'
-import ReactFlow, { Background, Controls } from 'reactflow'
-import 'reactflow/dist/style.css'
+import Link from 'next/link'
+import {
+    MapPin, Tag, FileText, ExternalLink,
+    Activity, Gift, ArrowLeft, ShieldCheck
+} from 'lucide-react'
 
 const activityEvent = parseAbiItem(
     'event ActivityRecorded(uint256 indexed assetId, string description)'
@@ -16,223 +19,297 @@ const benefitEvent = parseAbiItem(
     'event BenefitDistributed(uint256 indexed assetId, address recipient)'
 )
 
-export default function ExplorerDetail() {
+export default function ExplorerDetailPage() {
     const { id } = useParams()
 
     const [asset, setAsset] = useState<any>(null)
     const [activities, setActivities] = useState<any[]>([])
     const [benefits, setBenefits] = useState<any[]>([])
-    const [nodes, setNodes] = useState<any[]>([])
-    const [edges, setEdges] = useState<any[]>([])
+    const [loading, setLoading] = useState(true)
 
     const fetchAsset = async () => {
-        const { data } = await supabase
-            .from('assets')
-            .select('*')
-            .eq('id', id)
-            .single()
-        setAsset(data)
+        setLoading(true)
+        try {
+            const { data } = await supabase
+                .from('assets')
+                .select('*')
+                .eq('id', id)
+                .single()
+            setAsset(data)
+        } catch (error) {
+            console.error("Error fetching asset:", error)
+        } finally {
+            setLoading(false)
+        }
     }
 
-    const fetchLogs = async (registry: string) => {
-        const latest = await publicClient.getBlockNumber()
-
-        const STEP = BigInt(800)
+    const fetchLogsData = async (registry: string | null, onchainId: any) => {
         let actAll: any[] = []
         let benAll: any[] = []
 
-        for (let start = latest - BigInt(2000); start < latest; start += STEP) {
-            const end = start + STEP > latest ? latest : start + STEP
+        const validId = onchainId !== undefined && onchainId !== null ? BigInt(onchainId) : null
+
+        // 1. STRATEGI UTAMA: Coba ambil log on-chain SEKALI SAJA tanpa loop (10 block terakhir) jika contract tersedia
+        if (registry && validId !== null) {
             try {
+                const latest = await publicClient.getBlockNumber()
+                const startBlock = latest - BigInt(9) < 0n ? 0n : latest - BigInt(9)
+
                 const [act, ben] = await Promise.all([
-                    publicClient.getLogs({ address: registry as `0x${string}`, event: activityEvent, fromBlock: start, toBlock: end }),
-                    publicClient.getLogs({ address: registry as `0x${string}`, event: benefitEvent, fromBlock: start, toBlock: end })
+                    publicClient.getLogs({
+                        address: registry as `0x${string}`,
+                        event: activityEvent,
+                        args: { assetId: validId },
+                        fromBlock: startBlock,
+                        toBlock: latest
+                    }),
+                    publicClient.getLogs({
+                        address: registry as `0x${string}`,
+                        event: benefitEvent,
+                        args: { assetId: validId },
+                        fromBlock: startBlock,
+                        toBlock: latest
+                    })
                 ])
-                actAll = [...actAll, ...act]
-                benAll = [...benAll, ...ben]
-            } catch (e) { console.error(e) }
+                actAll = [...act]
+                benAll = [...ben]
+            } catch (e) {
+                console.warn("Gagal mengambil realtime blockchain logs (Alchemy limit), beralih ke database...", e)
+            }
         }
+
+        // 2. STRATEGI FALLBACK MUTLAK: Jika on-chain kosong atau gagal/terkena rate-limit, ambil data lengkap dari Supabase
+        if (actAll.length === 0 && benAll.length === 0) {
+            console.log("Mengambil riwayat dari database Supabase...")
+            try {
+                const [resAct, resDist] = await Promise.all([
+                    supabase.from('activities').select('*').eq('asset_id', id).order('created_at', { ascending: false }),
+                    supabase.from('distributions').select('*').eq('asset_id', id).order('created_at', { ascending: false })
+                ])
+
+                if (resAct.data) {
+                    actAll = resAct.data.map((item: any) => ({
+                        args: { assetId: onchainId || 0, description: item.description || item.notes || 'Aktivitas tercatat' },
+                        transactionHash: item.tx_hash || item.transaction_hash || '0x00000000...database'
+                    }))
+                }
+
+                if (resDist.data) {
+                    benAll = resDist.data.map((item: any) => ({
+                        args: { assetId: onchainId || 0, recipient: item.recipient_name || item.recipient || 'Penerima Manfaat' },
+                        transactionHash: item.tx_hash || item.transaction_hash || '0x00000000...database'
+                    }))
+                }
+            } catch (supErr) {
+                console.error("Gagal memuat data dari Supabase:", supErr)
+            }
+        }
+
         setActivities(actAll)
         setBenefits(benAll)
     }
 
-    const buildGraph = () => {
-        if (!asset) return
-        const newNodes: any[] = []
-        const newEdges: any[] = []
+    useEffect(() => {
+        fetchAsset()
+    }, [id])
 
-        newNodes.push({
-            id: 'asset',
-            data: { label: `🏠 ${asset.name}` },
-            position: { x: 350, y: 50 },
-            style: { background: '#16a34a', color: 'white', borderRadius: '8px', padding: '10px', width: 150 },
-        })
+    useEffect(() => {
+        if (asset) {
+            const actualOnchainId = asset.onchain_id ?? asset.on_chain_id ?? asset.onchainId ?? null;
+            const actualRegistry = asset.registry_address ?? asset.registryAddress ?? null;
 
-        activities.forEach((log, i) => {
-            const id = `act-${i}`
-            newNodes.push({
-                id,
-                data: { label: '📜 Activity' },
-                position: { x: 100 + i * 200, y: 180 },
-            })
-            newEdges.push({ id: `e-asset-${id}`, source: 'asset', target: id, animated: true })
-        })
+            fetchLogsData(actualRegistry, actualOnchainId)
+        }
+    }, [asset])
 
-        benefits.forEach((log, i) => {
-            const id = `ben-${i}`
-            newNodes.push({
-                id,
-                data: { label: `💸 ${log.args.recipient?.slice(0, 6)}...` },
-                position: { x: 100 + i * 200, y: 300 },
-                style: { background: '#22c55e', color: 'white', borderRadius: '8px' },
-            })
-            newEdges.push({ id: `e-asset-${id}`, source: 'asset', target: id })
-        })
+    if (loading) return (
+        <div className="min-h-screen bg-[#f7f9fb] flex items-center justify-center">
+            <p className="text-sm text-gray-400 animate-pulse">Loading Asset Data...</p>
+        </div>
+    )
 
-        setNodes(newNodes)
-        setEdges(newEdges)
-    }
-
-    useEffect(() => { fetchAsset() }, [])
-    useEffect(() => { if (asset?.registry_address) fetchLogs(asset.registry_address) }, [asset])
-    useEffect(() => { buildGraph() }, [asset, activities, benefits])
-
-    if (!asset) return <div className="p-10 text-center animate-pulse">Loading Asset Data...</div>
+    if (!asset) return (
+        <div className="min-h-screen bg-[#f7f9fb] flex items-center justify-center">
+            <p className="text-sm text-gray-400">Asset not found.</p>
+        </div>
+    )
 
     return (
-        <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 p-6 md:p-10">
+        <div className="min-h-screen bg-[#f7f9fb]">
 
-            <div className="max-w-6xl mx-auto">
-
-                {/* HEADER */}
-                <div className="mb-10">
-                    <p className="text-sm text-slate-500">
-                        Explorer / {asset.asset_type}
-                    </p>
-
-                    <h1 className="text-3xl font-bold text-slate-900 mt-1">
-                        {asset.name}
-                    </h1>
-                </div>
-
-                <div className="grid lg:grid-cols-3 gap-6">
-
-                    {/* LEFT */}
-                    <div className="space-y-6">
-
-                        <div className="bg-white/80 backdrop-blur p-6 rounded-2xl border shadow-sm">
-                            <h2 className="font-semibold mb-4">Asset Information</h2>
-
-                            <div className="space-y-3 text-sm">
-                                <div>
-                                    <p className="text-gray-400">Type</p>
-                                    <p className="font-medium">{asset.asset_type}</p>
-                                </div>
-
-                                <div>
-                                    <p className="text-gray-400">Location</p>
-                                    <p className="font-medium">{asset.location}</p>
-                                </div>
-
-                                <div>
-                                    <p className="text-gray-400">Status</p>
-                                    <span className={`text-xs px-2 py-1 rounded-full ${
-                                        asset.status === 'approved'
-                                            ? 'bg-green-100 text-green-700'
-                                            : asset.status === 'pending'
-                                                ? 'bg-yellow-100 text-yellow-700'
-                                                : 'bg-red-100 text-red-600'
-                                    }`}>
-                  {asset.status}
-                </span>
-                                </div>
-
-                                <a
-                                    href={asset.ipfs_url}
-                                    target="_blank"
-                                    className="text-blue-600 text-sm hover:underline"
-                                >
-                                    📄 View Document (IPFS)
-                                </a>
-                            </div>
+            {/* TOP NAVIGATION BAR */}
+            <div className="bg-white border-b border-gray-200">
+                <div className="max-w-5xl mx-auto px-6 py-4 flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                        <div className="w-7 h-7 rounded-lg bg-emerald-600 flex items-center justify-center">
+                            <ShieldCheck size={14} className="text-white" />
                         </div>
+                        <span className="font-bold text-gray-900 text-[15px]">WaqfChain</span>
+                        <span className="text-gray-300 text-sm">/</span>
+                        <Link href="/explorer" className="text-[13px] text-gray-500 hover:text-emerald-600 transition-colors">
+                            Explorer
+                        </Link>
+                        <span className="text-gray-300 text-sm">/</span>
+                        <span className="text-[13px] text-gray-400 truncate max-w-[120px] font-mono">{asset.id}</span>
+                    </div>
+                    <div className="flex items-center gap-2 text-[12px] text-gray-400">
+                        <span className="relative flex h-2 w-2">
+                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                            <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
+                        </span>
+                        <span>Sepolia Testnet</span>
+                    </div>
+                </div>
+            </div>
 
-                        <div className="bg-gradient-to-br from-green-600 to-green-800 text-white p-6 rounded-2xl shadow-md">
-                            <p className="text-sm opacity-80">Total Distribution</p>
-                            <p className="text-2xl font-bold mt-2">
-                                {benefits.length} Recipients
+            {/* MAIN CONTENT AREA */}
+            <div className="max-w-5xl mx-auto px-6 py-8 space-y-4">
+
+                {/* BACK BUTTON */}
+                <Link
+                    href="/explorer"
+                    className="inline-flex items-center gap-1.5 text-[12px] text-gray-400 hover:text-gray-700 transition-colors"
+                >
+                    <ArrowLeft size={13} /> Back to Explorer
+                </Link>
+
+                {/* HEADER ASSET CARD */}
+                <div className="bg-white border border-gray-200 rounded-xl p-5">
+                    <div className="flex items-start justify-between gap-4">
+                        <div>
+                            <p className="text-[11px] font-medium tracking-widest uppercase text-gray-400 mb-1">
+                                Asset Detail
                             </p>
+                            <h1 className="text-[20px] font-semibold text-gray-900 mb-2">
+                                {asset.name}
+                            </h1>
+                            <div className="flex flex-wrap items-center gap-3 text-[12px] text-gray-400">
+                                {asset.asset_type && (
+                                    <span className="flex items-center gap-1">
+                                        <Tag size={11} /> {asset.asset_type}
+                                    </span>
+                                )}
+                                {asset.location && (
+                                    <span className="flex items-center gap-1">
+                                        <MapPin size={11} /> {asset.location}
+                                    </span>
+                                )}
+                            </div>
                         </div>
+                        <span className="shrink-0 text-[10px] px-2.5 py-0.5 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-full font-medium">
+                            Verified Asset
+                        </span>
                     </div>
 
-                    {/* RIGHT */}
-                    <div className="lg:col-span-2 space-y-6">
+                    {asset.ipfs_url && (
+                        <a
+                            href={asset.ipfs_url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="mt-4 inline-flex items-center gap-1.5 text-[12px] text-emerald-600 hover:underline font-medium"
+                        >
+                            <FileText size={12} /> View Document (IPFS) <ExternalLink size={11} />
+                        </a>
+                    )}
+                </div>
 
-                        {/* GRAPH */}
-                        <div className="bg-white/80 backdrop-blur p-6 rounded-2xl border shadow-sm">
-                            <h2 className="font-semibold mb-4">
-                                🧠 Waqf Flow Visualization
-                            </h2>
-
-                            <div className="rounded-xl overflow-hidden border bg-slate-50 h-[420px]">
-                                <ReactFlow nodes={nodes} edges={edges} fitView>
-                                    <Background />
-                                    <Controls />
-                                </ReactFlow>
-                            </div>
+                {/* COUNTER STATS ROW */}
+                <div className="grid grid-cols-2 gap-4">
+                    <div className="bg-white border border-gray-200 rounded-xl p-4">
+                        <p className="text-[10px] font-medium tracking-widest uppercase text-gray-400 mb-2">Activities</p>
+                        <div className="flex items-end gap-2">
+                            <p className="text-[28px] font-bold text-gray-900 leading-none">{activities.length}</p>
+                            <Activity size={16} className="text-gray-300 mb-1" />
                         </div>
-
-                        {/* LOGS */}
-                        <div className="grid md:grid-cols-2 gap-6">
-
-                            {/* ACTIVITY */}
-                            <div className="bg-white/80 backdrop-blur p-6 rounded-2xl border shadow-sm">
-                                <h2 className="font-semibold mb-4">📜 Activity</h2>
-
-                                <div className="space-y-3 max-h-[300px] overflow-y-auto">
-                                    {activities.length > 0 ? activities.map((log, i) => (
-                                        <div key={i} className="p-3 border rounded-lg text-xs hover:bg-gray-50 transition">
-                                            <p className="text-blue-600 font-mono">
-                                                {log.transactionHash.slice(0, 16)}...
-                                            </p>
-                                            <p className="text-gray-500">
-                                                Asset ID: {log.args.assetId?.toString()}
-                                            </p>
-                                        </div>
-                                    )) : (
-                                        <p className="text-sm text-gray-400">
-                                            Belum ada aktivitas
-                                        </p>
-                                    )}
-                                </div>
-                            </div>
-
-                            {/* BENEFIT */}
-                            <div className="bg-white/80 backdrop-blur p-6 rounded-2xl border shadow-sm">
-                                <h2 className="font-semibold mb-4">💸 Distribution</h2>
-
-                                <div className="space-y-3 max-h-[300px] overflow-y-auto">
-                                    {benefits.length > 0 ? benefits.map((log, i) => (
-                                        <div key={i} className="p-3 border rounded-lg text-xs hover:bg-gray-50 transition">
-                                            <p className="text-green-600 font-medium">
-                                                {log.args.recipient}
-                                            </p>
-                                            <p className="text-gray-400 font-mono">
-                                                {log.transactionHash.slice(0, 16)}...
-                                            </p>
-                                        </div>
-                                    )) : (
-                                        <p className="text-sm text-gray-400">
-                                            Belum ada distribusi
-                                        </p>
-                                    )}
-                                </div>
-                            </div>
-
+                    </div>
+                    <div className="bg-white border border-gray-200 rounded-xl p-4">
+                        <p className="text-[10px] font-medium tracking-widest uppercase text-gray-400 mb-2">Total Distributions</p>
+                        <div className="flex items-end gap-2">
+                            <p className="text-[28px] font-bold text-emerald-700 leading-none">{benefits.length}</p>
+                            <Gift size={16} className="text-emerald-200 mb-1" />
                         </div>
-
                     </div>
                 </div>
+
+                {/* LOGS GRID COMPONENT */}
+                <div className="grid md:grid-cols-2 gap-4">
+
+                    {/* ACTIVITY LIST */}
+                    <div className="bg-white border border-gray-200 rounded-xl p-5">
+                        <div className="flex items-center gap-2 mb-4">
+                            <Activity size={14} className="text-gray-400" />
+                            <h2 className="text-[13px] font-semibold text-gray-800">📜 Activity Logs</h2>
+                        </div>
+
+                        <div className="space-y-2.5 max-h-[350px] overflow-y-auto pr-1">
+                            {activities.length > 0 ? activities.map((log, i) => (
+                                <div key={i} className="p-3 bg-gray-50/60 border border-gray-100 rounded-lg text-[12px] hover:bg-gray-50 transition">
+                                    <div className="flex items-center justify-between text-gray-400 font-mono text-[11px] mb-1">
+                                        <span>Asset ID: {log.args.assetId?.toString()}</span>
+                                        {log.transactionHash && log.transactionHash !== '0x00000000...database' ? (
+                                            <a
+                                                href={`https://sepolia.etherscan.io/tx/${log.transactionHash}`}
+                                                target="_blank"
+                                                rel="noreferrer"
+                                                className="text-blue-500 hover:underline flex items-center gap-0.5"
+                                            >
+                                                {log.transactionHash.slice(0, 8)}... <ExternalLink size={10} />
+                                            </a>
+                                        ) : (
+                                            <span className="text-gray-400 text-[10px]">Database Record</span>
+                                        )}
+                                    </div>
+                                    <p className="text-gray-700 font-medium">{log.args.description}</p>
+                                </div>
+                            )) : (
+                                <div className="py-12 text-center text-gray-400 text-[12px]">
+                                    Belum ada aktivitas terdeteksi
+                                </div>
+                            )}
+                        </div>
+                    </div>
+
+                    {/* BENEFIT/DISTRIBUTION LIST */}
+                    <div className="bg-white border border-gray-200 rounded-xl p-5">
+                        <div className="flex items-center gap-2 mb-4">
+                            <Gift size={14} className="text-emerald-500" />
+                            <h2 className="text-[13px] font-semibold text-gray-800">💸 Distributions</h2>
+                        </div>
+
+                        <div className="space-y-2.5 max-h-[350px] overflow-y-auto pr-1">
+                            {benefits.length > 0 ? benefits.map((log, i) => (
+                                <div key={i} className="p-3 bg-gray-50/60 border border-gray-100 rounded-lg text-[12px] hover:bg-emerald-50/20 transition">
+                                    <p className="text-emerald-700 font-mono text-[11px] font-medium truncate mb-1">
+                                        Recipient: {log.args.recipient}
+                                    </p>
+                                    <div className="flex items-center justify-between text-gray-400 text-[11px]">
+                                        <span className="font-mono">
+                                            {log.transactionHash !== '0x00000000...database'
+                                                ? `Tx: ${log.transactionHash.slice(0, 10)}...`
+                                                : 'Database Record'}
+                                        </span>
+                                        {log.transactionHash && log.transactionHash !== '0x00000000...database' && (
+                                            <a
+                                                href={`https://sepolia.etherscan.io/tx/${log.transactionHash}`}
+                                                target="_blank"
+                                                rel="noreferrer"
+                                                className="text-blue-500 hover:underline"
+                                            >
+                                                View Tx <ExternalLink size={9} className="inline" />
+                                            </a>
+                                        )}
+                                    </div>
+                                </div>
+                            )) : (
+                                <div className="py-12 text-center text-gray-400 text-[12px]">
+                                    Belum ada distribusi terdeteksi
+                                </div>
+                            )}
+                        </div>
+                    </div>
+
+                </div>
+
             </div>
         </div>
     )

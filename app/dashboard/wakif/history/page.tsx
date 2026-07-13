@@ -1,18 +1,22 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState, Fragment } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useUser } from '@/hooks/useUser'
 
 import { Badge } from '@/components/ui/badge'
-import { Card, CardContent } from '@/components/ui/card'
 import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
-import { ScrollArea } from '@/components/ui/scroll-area'
+import {
+    Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
+} from '@/components/ui/table'
+import {
+    Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from '@/components/ui/select'
 import {
     CheckCircle2, Clock, XCircle, ExternalLink,
-    Wallet, ArrowDownRight, Inbox,
+    ArrowDownRight, Inbox, FileCheck2, Building2, ChevronDown, ChevronRight, Zap,
 } from 'lucide-react'
 
 // ── Types ─────────────────────────────────────────────────
@@ -20,6 +24,15 @@ type Distribution = {
     id: string
     amount: number
     description: string
+    created_at: string
+}
+
+type Activity = {
+    id: string
+    action: string
+    description: string
+    actor_id: string
+    actor_name?: string
     created_at: string
 }
 
@@ -33,7 +46,10 @@ type Asset = {
     block_number?: number | null
     created_at: string
     nazhir_name?: string
+    registry_address: string
+    registry_name?: string
     distributions: Distribution[]
+    activities: Activity[]
 }
 
 // ── Config ────────────────────────────────────────────────
@@ -41,23 +57,17 @@ const STATUS_CONFIG = {
     approved: {
         label: 'Disetujui',
         Icon: CheckCircle2,
-        dotClass:   'bg-green-50 border-green-500',
-        badgeClass: 'bg-green-50 text-green-700 border-green-200 hover:bg-green-50',
-        lineClass:  'bg-green-500',
+        badgeClass: 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-50',
     },
     pending: {
         label: 'Menunggu',
         Icon: Clock,
-        dotClass:   'bg-amber-50 border-amber-400',
         badgeClass: 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-50',
-        lineClass:  'bg-amber-400',
     },
     rejected: {
         label: 'Ditolak',
         Icon: XCircle,
-        dotClass:   'bg-red-50 border-red-500',
         badgeClass: 'bg-red-50 text-red-600 border-red-200 hover:bg-red-50',
-        lineClass:  'bg-red-400',
     },
 }
 
@@ -65,29 +75,19 @@ const STATUS_CONFIG = {
 const truncateHash = (h: string) => `${h.slice(0, 6)}…${h.slice(-6)}`
 const formatRupiah = (v: number) =>
     new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(v)
-const formatDate = (d: string) =>
-    new Date(d).toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })
 const formatDateShort = (d: string) =>
     new Date(d).toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' })
 
 // ── Skeleton ──────────────────────────────────────────────
-function TimelineSkeleton() {
+function TableSkeleton() {
     return (
-        <div className="relative pl-6 space-y-4 max-w-5xl">
-            <div className="absolute left-[11px] top-2 bottom-0 w-px bg-gray-100" />
-            {[...Array(3)].map((_, i) => (
-                <div key={i} className="relative">
-                    <Skeleton className="absolute -left-[19px] top-1 w-3 h-3 rounded-full" />
-                    <Skeleton className="h-3 w-32 mb-2" />
-                    <Card className="border-gray-200 shadow-none rounded-xl">
-                        <CardContent className="p-3 space-y-2">
-                            <div className="flex justify-between">
-                                <Skeleton className="h-4 w-40" />
-                                <Skeleton className="h-5 w-20 rounded-full" />
-                            </div>
-                            <Skeleton className="h-3 w-48" />
-                        </CardContent>
-                    </Card>
+        <div className="bg-white rounded-xl border border-neutral-200/80 shadow-sm p-4 space-y-3">
+            {[...Array(5)].map((_, i) => (
+                <div key={i} className="flex items-center gap-4">
+                    <Skeleton className="h-4 w-40" />
+                    <Skeleton className="h-4 w-24" />
+                    <Skeleton className="h-5 w-20 rounded-full" />
+                    <Skeleton className="h-4 w-28 ml-auto" />
                 </div>
             ))}
         </div>
@@ -97,8 +97,12 @@ function TimelineSkeleton() {
 // ── Main ──────────────────────────────────────────────────
 export default function WakifHistory() {
     const { user } = useUser()
-    const [assets, setAssets]   = useState<Asset[]>([])
-    const [loading, setLoading] = useState(true)
+    const [assets, setAssets]     = useState<Asset[]>([])
+    const [loading, setLoading]   = useState(true)
+    const [expandedId, setExpandedId] = useState<string | null>(null)
+
+    const [registryFilter, setRegistryFilter] = useState<string>('all')
+    const [statusFilter, setStatusFilter]     = useState<string>('all')
 
     useEffect(() => {
         if (user) fetchData()
@@ -106,242 +110,386 @@ export default function WakifHistory() {
 
     const fetchData = async () => {
         setLoading(true)
-        const { data } = await supabase
+
+        const { data: assetsData } = await supabase
             .from('assets')
             .select(`*, distributions (*)`)
             .eq('wakif_id', user!.id)
             .order('created_at', { ascending: false })
-        setAssets((data as Asset[]) || [])
+
+        const assetIds  = (assetsData || []).map(a => a.id)
+        const addresses = [...new Set((assetsData || []).map(a => a.registry_address).filter(Boolean))]
+
+        // ── ambil nama registry (bukan FK resmi, jadi query terpisah) ──
+        let registryMap: Record<string, string> = {}
+        if (addresses.length > 0) {
+            const { data: registriesData } = await supabase
+                .from('registries')
+                .select('registry_address, name')
+                .in('registry_address', addresses)
+
+            registryMap = Object.fromEntries(
+                (registriesData || []).map(r => [r.registry_address, r.name])
+            )
+        }
+
+        // ── ambil activities untuk semua asset sekaligus ──
+        const activitiesByAsset: Record<string, Activity[]> = {}
+        if (assetIds.length > 0) {
+            const { data: activitiesData } = await supabase
+                .from('activities')
+                .select('id, asset_id, action, description, actor_id, created_at, users:actor_id (email, role)')
+                .in('asset_id', assetIds)
+                .order('created_at', { ascending: false })
+
+            const activityList: Activity[] = (activitiesData || []).map((act: any) => ({
+                id: act.id,
+                action: act.action,
+                description: act.description,
+                actor_id: act.actor_id,
+                actor_name: act.users?.email ?? 'Nazhir',
+                created_at: act.created_at,
+                asset_id: act.asset_id, // dipakai buat grouping di bawah
+            }))
+
+            activityList.forEach((entry: any) => {
+                if (!activitiesByAsset[entry.asset_id]) activitiesByAsset[entry.asset_id] = []
+                activitiesByAsset[entry.asset_id].push(entry)
+            })
+        }
+
+        const merged = (assetsData || []).map(a => ({
+            ...a,
+            registry_name: registryMap[a.registry_address] || 'Registry tidak dikenal',
+            activities: activitiesByAsset[a.id] || [],
+        }))
+
+        setAssets(merged as Asset[])
         setLoading(false)
     }
 
-    const totalDistributions = assets.reduce((sum, a) => sum + (a.distributions?.length ?? 0), 0)
-    const totalDistributed   = assets.reduce(
-        (sum, a) => sum + (a.distributions?.reduce((s, d) => s + d.amount, 0) ?? 0), 0
-    )
+    const registryOptions = useMemo(() => {
+        const map = new Map<string, string>()
+        assets.forEach(a => map.set(a.registry_address, a.registry_name || 'Registry tidak dikenal'))
+        return Array.from(map, ([address, name]) => ({ address, name }))
+    }, [assets])
+
+    const filteredAssets = useMemo(() => {
+        return assets.filter(a => {
+            const matchRegistry = registryFilter === 'all' || a.registry_address === registryFilter
+            const matchStatus   = statusFilter === 'all' || a.status === statusFilter
+            return matchRegistry && matchStatus
+        })
+    }, [assets, registryFilter, statusFilter])
+
+    const approvedCount   = assets.filter(a => a.status === 'approved').length
+    const registriesUsed  = registryOptions.length
+    const totalActivities = assets.reduce((sum, a) => sum + (a.activities?.length ?? 0), 0)
 
     return (
         <TooltipProvider>
-            {/* Membatasi max-w-5xl agar konten tidak melebar ekstrem di monitor ultra-wide */}
-            <div className="space-y-4 max-w-5xl mx-auto">
+            <div className="min-h-screen bg-neutral-50/50 p-6 sm:p-8">
+                <div className="space-y-6 max-w-6xl mx-auto">
 
-                {/* ── Header ── */}
-                <div className="flex items-start justify-between">
+                    {/* ── Header ── */}
                     <div>
-                        <p className="text-[11px] text-gray-400 mb-0.5">Wakif · Audit Trail</p>
-                        <h1 className="text-lg font-semibold text-gray-900 tracking-tight">Riwayat Waqf</h1>
-                        <p className="text-xs text-gray-400 mt-0.5">
-                            Kronologi lengkap aset &amp; distribusi on-chain
+                        <p className="text-[11px] font-semibold tracking-widest uppercase text-neutral-400 mb-1">
+                            Wakif · Audit Trail
+                        </p>
+                        <h1 className="text-2xl font-bold text-neutral-900 tracking-tight">Riwayat Waqf</h1>
+                        <p className="text-sm text-neutral-500 mt-0.5">
+                            Kronologi lengkap aset, aktivitas &amp; distribusi on-chain
                         </p>
                     </div>
-                    <div className="flex items-center gap-1.5 text-[10px] text-gray-500 bg-gray-50 border border-gray-200 rounded-full px-2.5 py-1">
-                        <Wallet size={10} />
-                        <span className="font-mono">{user?.id ? truncateHash(user.id) : '—'}</span>
-                        <span className="text-gray-300">·</span>
-                        <span className="w-1.5 h-1.5 rounded-full bg-green-500 inline-block" />
-                        <span>Sepolia</span>
-                    </div>
-                </div>
 
-                {/* ── Summary strip (Lebih Padat) ── */}
-                {!loading && assets.length > 0 && (
-                    <div className="grid grid-cols-3 gap-3 max-w-3xl">
-                        {[
-                            {
-                                label: 'Aset terdaftar',
-                                value: `${assets.length} aset`,
-                                sub: `${assets.filter(a => a.status === 'approved').length} on-chain`,
-                            },
-                            {
-                                label: 'Total distribusi',
-                                value: `${totalDistributions}x`,
-                                sub: 'transaksi keluar',
-                            },
-                            {
-                                label: 'Total didistribusi',
-                                value: formatRupiah(totalDistributed),
-                                sub: 'dari seluruh aset',
-                                mono: true,
-                            },
-                        ].map(s => (
-                            <div key={s.label} className="bg-gray-50 rounded-xl p-3 border border-gray-100 flex flex-col justify-between">
-                                <div>
-                                    <p className="text-[9px] text-gray-400 uppercase tracking-wider mb-0.5">{s.label}</p>
-                                    <p className={`text-[14px] font-semibold text-gray-900 ${s.mono ? 'font-mono text-[12px]' : ''}`}>
-                                        {s.value}
-                                    </p>
+                    {/* ── Summary strip ── */}
+                    {!loading && assets.length > 0 && (
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                            {[
+                                {
+                                    label: 'Aset terdaftar',
+                                    value: `${assets.length} aset`,
+                                    sub: `${approvedCount} on-chain`,
+                                    Icon: FileCheck2,
+                                },
+                                {
+                                    label: 'Registry digunakan',
+                                    value: `${registriesUsed} registry`,
+                                    sub: 'nazhir berbeda',
+                                    Icon: Building2,
+                                },
+                                {
+                                    label: 'Total aktivitas',
+                                    value: `${totalActivities}x`,
+                                    sub: 'dicatat nazhir',
+                                    Icon: Zap,
+                                },
+                                {
+                                    label: 'Total distribusi',
+                                    value: `${assets.reduce((sum, a) => sum + (a.distributions?.length ?? 0), 0)}x`,
+                                    sub: 'transaksi penyaluran',
+                                    Icon: ArrowDownRight,
+                                },
+                            ].map(s => (
+                                <div
+                                    key={s.label}
+                                    className="bg-white rounded-xl p-4 border border-neutral-200/80 shadow-sm flex flex-col justify-between"
+                                >
+                                    <div className="flex items-center justify-between mb-2">
+                                        <p className="text-[10px] font-medium text-neutral-400 uppercase tracking-wider">
+                                            {s.label}
+                                        </p>
+                                        <s.Icon size={16} className="text-neutral-400 shrink-0" />
+                                    </div>
+                                    <div>
+                                        <p className="text-lg font-bold text-neutral-900">{s.value}</p>
+                                        <p className="text-xs text-neutral-400 mt-0.5">{s.sub}</p>
+                                    </div>
                                 </div>
-                                <p className="text-[10px] text-gray-400 mt-1">{s.sub}</p>
-                            </div>
-                        ))}
-                    </div>
-                )}
+                            ))}
+                        </div>
+                    )}
 
-                <Separator className="bg-gray-100 my-2" />
+                    {/* ── Filter bar ── */}
+                    {!loading && assets.length > 0 && (
+                        <div className="flex flex-wrap items-center gap-3 bg-white p-3 rounded-xl border border-neutral-200/80 shadow-sm">
+                            <span className="text-xs font-medium text-neutral-400 uppercase tracking-wider pl-1">
+                                Filter
+                            </span>
 
-                {/* ── Timeline ── */}
-                {loading ? (
-                    <TimelineSkeleton />
-                ) : assets.length === 0 ? (
-                    <div className="flex flex-col items-center justify-center py-16 text-center">
-                        <Inbox size={28} className="text-gray-200 mb-2" />
-                        <p className="text-xs text-gray-400">Belum ada aset waqf terdaftar.</p>
-                    </div>
-                ) : (
-                    <div className="relative pl-6">
-                        {/* vertical line */}
-                        <div className="absolute left-[9px] top-2 bottom-2 w-px bg-gray-200" />
+                            <Select value={registryFilter} onValueChange={setRegistryFilter}>
+                                <SelectTrigger className="w-[220px] h-8 text-xs">
+                                    <div className="flex items-center gap-1.5">
+                                        <Building2 size={12} className="text-neutral-400" />
+                                        <SelectValue placeholder="Semua registry" />
+                                    </div>
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="all">Semua registry</SelectItem>
+                                    {registryOptions.map(r => (
+                                        <SelectItem key={r.address} value={r.address}>
+                                            {r.name}
+                                        </SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
 
-                        {/* Mengurangi space antar card dari space-y-8 ke space-y-4 */}
-                        <div className="space-y-4">
-                            {assets.map((asset, idx) => {
-                                const cfg = STATUS_CONFIG[asset.status] ?? STATUS_CONFIG.pending
-                                const { Icon } = cfg
-                                const isLast = idx === assets.length - 1
+                            <Select value={statusFilter} onValueChange={setStatusFilter}>
+                                <SelectTrigger className="w-[160px] h-8 text-xs">
+                                    <SelectValue placeholder="Semua status" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="all">Semua status</SelectItem>
+                                    <SelectItem value="approved">Disetujui</SelectItem>
+                                    <SelectItem value="pending">Menunggu</SelectItem>
+                                    <SelectItem value="rejected">Ditolak</SelectItem>
+                                </SelectContent>
+                            </Select>
 
-                                return (
-                                    <div key={asset.id} className="relative">
+                            {(registryFilter !== 'all' || statusFilter !== 'all') && (
+                                <button
+                                    onClick={() => { setRegistryFilter('all'); setStatusFilter('all') }}
+                                    className="text-xs font-medium text-neutral-400 hover:text-emerald-600 transition-colors"
+                                >
+                                    Reset filter
+                                </button>
+                            )}
 
-                                        {/* timeline dot (diperkecil sedikit) */}
-                                        <div
-                                            className={`absolute -left-[20px] top-1 w-[15px] h-[15px] rounded-full border-2 flex items-center justify-center ${cfg.dotClass}`}
-                                        >
-                                            <Icon size={8} className={
-                                                asset.status === 'approved' ? 'text-green-600' :
-                                                    asset.status === 'pending'  ? 'text-amber-500' : 'text-red-500'
-                                            } />
-                                        </div>
+                            <span className="text-xs text-neutral-400 ml-auto">
+                                Menampilkan {filteredAssets.length} dari {assets.length} aset
+                            </span>
+                        </div>
+                    )}
 
-                                        {/* date + block */}
-                                        <div className="flex items-center gap-2 mb-1.5">
-                                            <span className="text-[10px] text-gray-400 font-mono">
-                                                {formatDate(asset.created_at)}
-                                            </span>
-                                            {asset.block_number && (
-                                                <>
-                                                    <span className="text-gray-200 text-[10px]">·</span>
-                                                    <span className="text-[10px] text-gray-400 font-mono">
-                                                        block #{asset.block_number.toLocaleString()}
-                                                    </span>
-                                                </>
-                                            )}
-                                            {!isLast && (
-                                                <span className="text-[9px] text-gray-300 ml-auto">
-                                                    #{assets.length - idx}
-                                                </span>
-                                            )}
-                                        </div>
+                    <Separator className="bg-neutral-200/60" />
 
-                                        {/* main card (Padding dirapatkan) */}
-                                        <Card className="border-gray-200 shadow-none rounded-xl bg-white overflow-hidden max-w-4xl">
-                                            {/* top accent */}
-                                            <div className={`h-[2px] ${cfg.lineClass}`} />
+                    {/* ── Table ── */}
+                    {loading ? (
+                        <TableSkeleton />
+                    ) : assets.length === 0 ? (
+                        <div className="flex flex-col items-center justify-center py-16 text-center bg-white rounded-xl border border-neutral-200/80 shadow-sm">
+                            <Inbox size={32} className="text-neutral-300 mb-2" />
+                            <p className="text-sm text-neutral-500 font-medium">Belum ada aset waqf terdaftar.</p>
+                        </div>
+                    ) : filteredAssets.length === 0 ? (
+                        <div className="flex flex-col items-center justify-center py-16 text-center bg-white rounded-xl border border-neutral-200/80 shadow-sm">
+                            <Inbox size={32} className="text-neutral-300 mb-2" />
+                            <p className="text-sm text-neutral-500 font-medium">Tidak ada aset yang cocok dengan filter ini.</p>
+                        </div>
+                    ) : (
+                        <div className="bg-white rounded-xl border border-neutral-200/80 shadow-sm overflow-hidden">
+                            <Table>
+                                <TableHeader>
+                                    <TableRow className="hover:bg-transparent border-neutral-200">
+                                        <TableHead className="w-8" />
+                                        <TableHead className="text-xs font-medium text-neutral-400 uppercase tracking-wide">Nama Aset</TableHead>
+                                        <TableHead className="text-xs font-medium text-neutral-400 uppercase tracking-wide">Registry</TableHead>
+                                        <TableHead className="text-xs font-medium text-neutral-400 uppercase tracking-wide">Status</TableHead>
+                                        <TableHead className="text-xs font-medium text-neutral-400 uppercase tracking-wide">Tx Hash</TableHead>
+                                        <TableHead className="text-xs font-medium text-neutral-400 uppercase tracking-wide">Tanggal</TableHead>
+                                        <TableHead className="text-xs font-medium text-neutral-400 uppercase tracking-wide text-right">Aktivitas</TableHead>
+                                        <TableHead className="text-xs font-medium text-neutral-400 uppercase tracking-wide text-right">Distribusi</TableHead>
+                                    </TableRow>
+                                </TableHeader>
+                                <TableBody>
+                                    {filteredAssets.map(asset => {
+                                        const cfg = STATUS_CONFIG[asset.status] ?? STATUS_CONFIG.pending
+                                        const { Icon } = cfg
+                                        const hasDistributions = asset.distributions?.length > 0
+                                        const hasActivities    = asset.activities?.length > 0
+                                        const hasDetails       = hasDistributions || hasActivities
+                                        const isExpanded        = expandedId === asset.id
 
-                                            <CardContent className="p-3.5 space-y-2.5">
-                                                {/* title row */}
-                                                <div className="flex items-start justify-between gap-3">
-                                                    <div>
-                                                        <p className="font-semibold text-[13px] text-gray-900 leading-tight">
-                                                            {asset.name}
-                                                        </p>
-                                                        <p className="text-[10px] text-gray-400 mt-0.5 capitalize">
-                                                            {asset.asset_type}
-                                                        </p>
-                                                    </div>
-                                                    <Badge
-                                                        variant="outline"
-                                                        className={`text-[10px] font-medium rounded-full shrink-0 flex items-center gap-1 px-2 py-0.5 ${cfg.badgeClass}`}
-                                                    >
-                                                        <Icon size={9} />
-                                                        {cfg.label}
-                                                    </Badge>
-                                                </div>
-
-                                                {/* on-chain meta row */}
-                                                <div className="flex items-center gap-3 flex-wrap text-[11px]">
-                                                    {asset.value > 0 && (
-                                                        <span className="text-gray-600 font-medium">
-                                                            {formatRupiah(asset.value)}
+                                        return (
+                                            <Fragment key={asset.id}>
+                                                <TableRow
+                                                    className={`border-neutral-100 ${hasDetails ? 'cursor-pointer hover:bg-neutral-50/80' : ''}`}
+                                                    onClick={() => hasDetails && setExpandedId(isExpanded ? null : asset.id)}
+                                                >
+                                                    <TableCell className="py-3">
+                                                        {hasDetails && (
+                                                            isExpanded
+                                                                ? <ChevronDown size={14} className="text-neutral-400" />
+                                                                : <ChevronRight size={14} className="text-neutral-400" />
+                                                        )}
+                                                    </TableCell>
+                                                    <TableCell className="py-3">
+                                                        <p className="font-medium text-sm text-neutral-900">{asset.name}</p>
+                                                        <div className="flex items-center gap-1.5 mt-0.5">
+                                                            <span className="text-[11px] text-neutral-400 capitalize">{asset.asset_type}</span>
+                                                            {asset.value > 0 && (
+                                                                <>
+                                                                    <span className="text-neutral-300 text-[10px]">·</span>
+                                                                    <span className="text-[11px] font-semibold text-neutral-600">{formatRupiah(asset.value)}</span>
+                                                                </>
+                                                            )}
+                                                        </div>
+                                                    </TableCell>
+                                                    <TableCell className="py-3">
+                                                        <span className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-100">
+                                                            <Building2 size={10} />
+                                                            {asset.registry_name}
                                                         </span>
-                                                    )}
-                                                    {asset.nazhir_name && (
-                                                        <>
-                                                            <span className="text-gray-200">·</span>
-                                                            <span className="text-gray-500">
-                                                                {asset.nazhir_name}
-                                                            </span>
-                                                        </>
-                                                    )}
-                                                    {asset.tx_hash ? (
-                                                        <>
-                                                            <span className="text-gray-200">·</span>
+                                                    </TableCell>
+                                                    <TableCell className="py-3">
+                                                        <Badge
+                                                            variant="outline"
+                                                            className={`text-[11px] font-medium rounded-full flex items-center gap-1 px-2 py-0.5 border w-fit ${cfg.badgeClass}`}
+                                                        >
+                                                            <Icon size={10} />
+                                                            {cfg.label}
+                                                        </Badge>
+                                                    </TableCell>
+                                                    <TableCell className="py-3" onClick={(e) => e.stopPropagation()}>
+                                                        {asset.tx_hash ? (
                                                             <Tooltip>
                                                                 <TooltipTrigger asChild>
                                                                     <a
                                                                         href={`https://sepolia.etherscan.io/tx/${asset.tx_hash}`}
                                                                         target="_blank"
                                                                         rel="noopener noreferrer"
-                                                                        className="font-mono text-[10px] text-gray-400 hover:text-green-700 transition-colors inline-flex items-center gap-0.5"
+                                                                        className="font-mono text-xs text-neutral-400 hover:text-emerald-600 transition-colors inline-flex items-center gap-1"
                                                                     >
                                                                         {truncateHash(asset.tx_hash)}
-                                                                        <ExternalLink size={9} />
+                                                                        <ExternalLink size={10} />
                                                                     </a>
                                                                 </TooltipTrigger>
                                                                 <TooltipContent className="font-mono text-xs">
                                                                     {asset.tx_hash}
                                                                 </TooltipContent>
                                                             </Tooltip>
-                                                        </>
-                                                    ) : (
-                                                        <span className="font-mono text-[10px] text-gray-300 italic">
-                                                            awaiting confirmation...
-                                                        </span>
-                                                    )}
-                                                </div>
+                                                        ) : (
+                                                            <span className="font-mono text-xs text-neutral-300 italic">pending...</span>
+                                                        )}
+                                                    </TableCell>
+                                                    <TableCell className="py-3 text-xs text-neutral-500">
+                                                        {formatDateShort(asset.created_at)}
+                                                    </TableCell>
+                                                    <TableCell className="py-3 text-right">
+                                                        {hasActivities ? (
+                                                            <span className="text-xs font-semibold text-neutral-700">
+                                                                {asset.activities.length}x
+                                                            </span>
+                                                        ) : (
+                                                            <span className="text-xs text-neutral-300">—</span>
+                                                        )}
+                                                    </TableCell>
+                                                    <TableCell className="py-3 text-right">
+                                                        {hasDistributions ? (
+                                                            <span className="text-xs font-semibold text-emerald-600">
+                                                                {asset.distributions.length}x
+                                                            </span>
+                                                        ) : (
+                                                            <span className="text-xs text-neutral-300">—</span>
+                                                        )}
+                                                    </TableCell>
+                                                </TableRow>
 
-                                                {/* distributions */}
-                                                {asset.distributions?.length > 0 && (
-                                                    <>
-                                                        <Separator className="bg-gray-100 my-1" />
-                                                        <div>
-                                                            <p className="text-[9px] text-gray-400 uppercase tracking-wider mb-1.5 flex items-center gap-1">
-                                                                <ArrowDownRight size={10} className="text-blue-400" />
-                                                                {asset.distributions.length} distribusi
-                                                            </p>
-                                                            <ScrollArea className="max-h-32">
-                                                                <div className="space-y-1">
-                                                                    {asset.distributions.map(d => (
-                                                                        <div
-                                                                            key={d.id}
-                                                                            className="flex items-center justify-between text-[11px] px-2.5 py-1.5 rounded-lg bg-gray-50 hover:bg-gray-100 transition-colors"
-                                                                        >
-                                                                            <div className="flex items-center gap-1.5 min-w-0">
-                                                                                <span className="w-1 h-1 rounded-full bg-blue-300 shrink-0" />
-                                                                                <span className="text-gray-600 truncate">{d.description}</span>
-                                                                            </div>
-                                                                            <div className="flex items-center gap-2 shrink-0 ml-3">
-                                                                                <span className="font-mono text-green-600 font-medium text-[10px]">
-                                                                                    +{formatRupiah(d.amount)}
+                                                {isExpanded && hasDetails && (
+                                                    <TableRow className="border-neutral-100 bg-neutral-50/40 hover:bg-neutral-50/40">
+                                                        <TableCell />
+                                                        <TableCell colSpan={7} className="py-4 pl-4">
+                                                            <div className="grid grid-cols-1 md:grid-cols-2 gap-5 max-w-4xl">
+
+                                                                {/* ── Riwayat Aktivitas ── */}
+                                                                {hasActivities && (
+                                                                    <div className="space-y-1.5">
+                                                                        <p className="text-[10px] font-bold text-neutral-400 uppercase tracking-wider mb-2 flex items-center gap-1">
+                                                                            <Zap size={11} className="text-neutral-500" />
+                                                                            Riwayat Aktivitas
+                                                                        </p>
+                                                                        {asset.activities.map(act => (
+                                                                            <div
+                                                                                key={act.id}
+                                                                                className="flex items-center justify-between text-xs px-3 py-2 rounded-lg bg-white border border-neutral-200/80 shadow-sm"
+                                                                            >
+                                                                                <div className="flex items-center gap-2 min-w-0">
+                                                                                    <span className="w-1.5 h-1.5 rounded-full bg-neutral-400 shrink-0" />
+                                                                                    <span className="text-neutral-700 truncate">{act.description}</span>
+                                                                                </div>
+                                                                                <span className="text-neutral-400 shrink-0 ml-4">
+                                                                                    {formatDateShort(act.created_at)}
                                                                                 </span>
-                                                                                <span className="text-gray-300 text-[9px]">
+                                                                            </div>
+                                                                        ))}
+                                                                    </div>
+                                                                )}
+
+                                                                {/* ── Riwayat Distribusi ── */}
+                                                                {hasDistributions && (
+                                                                    <div className="space-y-1.5">
+                                                                        <p className="text-[10px] font-bold text-neutral-400 uppercase tracking-wider mb-2 flex items-center gap-1">
+                                                                            <ArrowDownRight size={11} className="text-emerald-500" />
+                                                                            Riwayat Distribusi
+                                                                        </p>
+                                                                        {asset.distributions.map(d => (
+                                                                            <div
+                                                                                key={d.id}
+                                                                                className="flex items-center justify-between text-xs px-3 py-2 rounded-lg bg-white border border-neutral-200/80 shadow-sm"
+                                                                            >
+                                                                                <div className="flex items-center gap-2 min-w-0">
+                                                                                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
+                                                                                    <span className="text-neutral-700 truncate">{d.description}</span>
+                                                                                </div>
+                                                                                <span className="text-neutral-400 shrink-0 ml-4">
                                                                                     {formatDateShort(d.created_at)}
                                                                                 </span>
                                                                             </div>
-                                                                        </div>
-                                                                    ))}
-                                                                </div>
-                                                            </ScrollArea>
-                                                        </div>
-                                                    </>
+                                                                        ))}
+                                                                    </div>
+                                                                )}
+                                                            </div>
+                                                        </TableCell>
+                                                    </TableRow>
                                                 )}
-                                            </CardContent>
-                                        </Card>
-                                    </div>
-                                )
-                            })}
+                                            </Fragment>
+                                        )
+                                    })}
+                                </TableBody>
+                            </Table>
                         </div>
-                    </div>
-                )}
+                    )}
+                </div>
             </div>
         </TooltipProvider>
     )
